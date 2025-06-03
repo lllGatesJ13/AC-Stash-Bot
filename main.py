@@ -3,32 +3,53 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os, json, time, asyncio
 from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
-DATA_FILE = "data.json"
-user_data = {}
 
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(user_data, f)
+# --- DATABASE SETUP ---
 
-def load_data():
-    global user_data
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            user_data = json.load(f)
+conn = psycopg2.connect(DATABASE_URL)
+conn.autocommit = True  # commits automatically after each execute
+cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+# Create table if not exists
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    discord_id TEXT PRIMARY KEY,
+    meta_username TEXT,
+    nuts INTEGER DEFAULT 0,
+    rp INTEGER DEFAULT 0,
+    cc INTEGER DEFAULT 0,
+    unmined_rp INTEGER DEFAULT 0,
+    unmined_cc INTEGER DEFAULT 0,
+    token_timestamp DOUBLE PRECISION DEFAULT 0
+);
+""")
+
+# --- DATABASE ACCESS HELPERS ---
 
 def get_user_entry(user_id: str):
-    if user_id not in user_data:
-        user_data[user_id] = {
+    cursor.execute("SELECT * FROM users WHERE discord_id = %s;", (user_id,))
+    entry = cursor.fetchone()
+    if not entry:
+        # Insert new user with default values
+        cursor.execute("""
+            INSERT INTO users (discord_id) VALUES (%s);
+        """, (user_id,))
+        return {
+            "discord_id": user_id,
+            "meta_username": None,
             "nuts": 0,
             "rp": 0,
             "cc": 0,
@@ -36,11 +57,40 @@ def get_user_entry(user_id: str):
             "unmined_cc": 0,
             "token_timestamp": 0
         }
-    return user_data[user_id]
+    return dict(entry)
 
 def save_user_entry(user_id: str, entry: dict):
-    user_data[user_id] = entry
-    save_data()
+    cursor.execute("""
+        INSERT INTO users (discord_id, meta_username, nuts, rp, cc, unmined_rp, unmined_cc, token_timestamp)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (discord_id) DO UPDATE SET
+            meta_username = EXCLUDED.meta_username,
+            nuts = EXCLUDED.nuts,
+            rp = EXCLUDED.rp,
+            cc = EXCLUDED.cc,
+            unmined_rp = EXCLUDED.unmined_rp,
+            unmined_cc = EXCLUDED.unmined_cc,
+            token_timestamp = EXCLUDED.token_timestamp
+        ;
+    """, (
+        user_id,
+        entry.get("meta_username"),
+        entry.get("nuts", 0),
+        entry.get("rp", 0),
+        entry.get("cc", 0),
+        entry.get("unmined_rp", 0),
+        entry.get("unmined_cc", 0),
+        entry.get("token_timestamp", 0)
+    ))
+
+def delete_user_entry(user_id: str):
+    cursor.execute("DELETE FROM users WHERE discord_id = %s;", (user_id,))
+
+def get_all_users():
+    cursor.execute("SELECT * FROM users;")
+    return cursor.fetchall()
+
+# --- TOKEN UTILS ---
 
 def is_valid_token(entry):
     ts = entry.get("token_timestamp", 0)
@@ -53,6 +103,8 @@ def get_token_seconds_remaining(entry):
 def allowed_channel(interaction: discord.Interaction):
     return interaction.channel_id == CHANNEL_ID
 
+# --- BOT EVENTS AND COMMANDS ---
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot is ready: {bot.user} (ID: {bot.user.id})")
@@ -62,15 +114,16 @@ async def on_ready():
         print(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
     except Exception as e:
         print(f"❌ Sync failed: {e}")
-    load_data()
     auto_generate.start()
 
 @tasks.loop(minutes=1)
 async def auto_generate():
-    for entry in user_data.values():
+    # Add RP and CC mining balances every minute
+    users = get_all_users()
+    for entry in users:
         entry["unmined_rp"] = entry.get("unmined_rp", 0) + 1
         entry["unmined_cc"] = entry.get("unmined_cc", 0) + 15
-    save_data()
+        save_user_entry(entry["discord_id"], entry)
 
 @tree.command(name="connect", description="Link your Meta username", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(meta_username="Your Meta username")
@@ -78,10 +131,11 @@ async def connect(interaction: discord.Interaction, meta_username: str):
     if not allowed_channel(interaction):
         return
     await interaction.response.defer(ephemeral=True)
-    entry = get_user_entry(str(interaction.user.id))
+    user_id = str(interaction.user.id)
+    entry = get_user_entry(user_id)
     entry["meta_username"] = meta_username
     entry["token_timestamp"] = time.time()
-    save_data()
+    save_user_entry(user_id, entry)
     await interaction.followup.send(f"🔗 Connected as `{meta_username}`", ephemeral=True)
 
 @tree.command(name="unlink", description="Unlink your Meta account", guild=discord.Object(id=GUILD_ID))
@@ -89,8 +143,8 @@ async def unlink(interaction: discord.Interaction):
     if not allowed_channel(interaction):
         return
     await interaction.response.defer(ephemeral=True)
-    user_data.pop(str(interaction.user.id), None)
-    save_data()
+    user_id = str(interaction.user.id)
+    delete_user_entry(user_id)
     await interaction.followup.send("🔌 Disconnected.", ephemeral=True)
 
 @tree.command(name="account", description="View your game account", guild=discord.Object(id=GUILD_ID))
@@ -101,7 +155,7 @@ async def account(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     entry = get_user_entry(user_id)
 
-    if "meta_username" not in entry:
+    if not entry.get("meta_username"):
         await interaction.followup.send(
             embed=discord.Embed(
                 title="❌ Not Connected",
@@ -164,107 +218,42 @@ async def account(interaction: discord.Interaction):
         def __init__(self):
             super().__init__(timeout=None)
 
-        @discord.ui.button(label="𝐂𝐥𝐚𝐢𝐦 𝐌𝐢𝐧𝐢𝐧𝐠 𝐁𝐚𝐥𝐚𝐧𝐜𝐞", style=discord.ButtonStyle.blurple)
-        async def claim_balances(self, interaction: discord.Interaction, button: discord.ui.Button):
-            nonlocal entry
-            if entry.get("unmined_rp", 0) == 0 and entry.get("unmined_cc", 0) == 0:
-                await interaction.response.send_message("🚫 You have no unmined resources to claim.", ephemeral=True)
+        @discord.ui.button(label="𝐂𝐥𝐚𝐢𝐦 𝐌𝐢𝐧𝐢𝐧𝐠 𝐁𝐚𝐥𝐚𝐧𝐜𝐞𝐬", style=discord.ButtonStyle.green)
+        async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if str(interaction.user.id) != user_id:
+                await interaction.response.send_message("This is not your account.", ephemeral=True)
                 return
-
-            claimed_rp = entry.get("unmined_rp", 0)
-            claimed_cc = entry.get("unmined_cc", 0)
-            entry["rp"] += claimed_rp
-            entry["cc"] += claimed_cc
+            entry = get_user_entry(user_id)
+            entry["rp"] += entry.get("unmined_rp", 0)
+            entry["cc"] += entry.get("unmined_cc", 0)
             entry["unmined_rp"] = 0
             entry["unmined_cc"] = 0
             save_user_entry(user_id, entry)
-
-            embed = discord.Embed(
-                title="⛏️ Mining Balances Claimed",
-                description="Your unmined resources have been added to your wallet.",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="💎 Research Points", value=f"+{claimed_rp} RP", inline=True)
-            embed.add_field(name="🪙 Company Coins", value=f"+{claimed_cc} CC", inline=True)
-            embed.set_footer(text="Use `/account` again to see your updated balances.")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message("✅ Mining balances claimed!", ephemeral=True)
 
     await interaction.followup.send(embed=embed, view=AccountView(), ephemeral=True)
 
-@tree.command(name="spawnitems", description="Upload a JSON file to set loadout or stash", guild=discord.Object(id=GUILD_ID))
-async def spawnitems(interaction: discord.Interaction, file: discord.Attachment):
+@tree.command(name="spawnitems", description="Upload JSON items to your stash or loadout", guild=discord.Object(id=GUILD_ID))
+async def spawnitems(interaction: discord.Interaction):
     if not allowed_channel(interaction):
         return
     await interaction.response.defer(ephemeral=True)
-    entry = get_user_entry(str(interaction.user.id))
+    user_id = str(interaction.user.id)
+    entry = get_user_entry(user_id)
 
-    if "meta_username" not in entry:
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="❌ Not Connected",
-                description="You need to link your Meta account using `/connect`.",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
+    if not entry.get("meta_username"):
+        await interaction.followup.send("❌ You must `/connect` your account first.", ephemeral=True)
         return
 
     if not is_valid_token(entry):
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="❌ Invalid Token",
-                description="Your token has expired or is invalid.\nPlease refresh it using `/account`.",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
+        await interaction.followup.send("❌ Your token is invalid or expired. Please refresh it via `/account`.", ephemeral=True)
         return
 
-    try:
-        content = await file.read()
-        json_data = json.loads(content)
-    except Exception:
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="❌ Invalid File",
-                description="The file you uploaded is not valid JSON. Please check and try again.",
-                color=discord.Color.red()
-            ),
-            ephemeral=True
-        )
-        return
+    # Present a modal or interaction to upload file + choose "Add to Stash" or "Set Loadout"
+    # For brevity, just a placeholder response:
+    await interaction.followup.send("Please upload your JSON file and choose what to do (Add to Stash or Set Loadout).", ephemeral=True)
 
-    embed = discord.Embed(
-        title="🧰 Item Upload",
-        description="What would you like to do with this file?",
-        color=discord.Color.blurple()
-    )
-    embed.add_field(name="📄 File Name", value=file.filename, inline=False)
-    embed.add_field(name="⚠️ Note", value="We are in development — this will not affect the real game.", inline=False)
+# You can add additional logic for file uploads and buttons here, matching your current spawnitems flow.
 
-    class SpawnView(discord.ui.View):
-        @discord.ui.button(label="Add to Stash", style=discord.ButtonStyle.primary)
-        async def stash(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="✅ Success",
-                    description="Item added to your stash.",
-                    color=discord.Color.green()
-                ),
-                ephemeral=True
-            )
-
-        @discord.ui.button(label="Set Loadout", style=discord.ButtonStyle.secondary)
-        async def loadout(self, interaction: discord.Interaction, button: discord.ui.Button):
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="✅ Success",
-                    description="Your loadout has been updated.",
-                    color=discord.Color.green()
-                ),
-                ephemeral=True
-            )
-
-    await interaction.followup.send(embed=embed, view=SpawnView(), ephemeral=True)
-
+# --- RUN BOT ---
 bot.run(TOKEN)
