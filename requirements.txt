@@ -3,3 +3,4 @@ python-dotenv
 requests
 aiohttp
 asyncpg
+psycopg2-binary
