@@ -4,3 +4,4 @@ requests
 aiohttp
 asyncpg
 psycopg2-binary
+flask
