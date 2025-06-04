@@ -2,9 +2,11 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
-import os, asyncio, time, json
+import os, asyncio, time, json, threading
 import psycopg2
 from psycopg2.extras import Json
+from flask import Flask
+from threading import Thread
 
 # Load .env
 load_dotenv()
@@ -14,12 +16,26 @@ GUILD_ID = int(os.getenv("GUILD_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Bot setup
+# Flask app for UptimeRobot pings
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    print("🌐 UptimeRobot ping received.")
+    return "Bot is alive!", 200
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+flask_thread = Thread(target=run_flask)
+flask_thread.start()
+
+# Discord bot setup
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# PostgreSQL connection
+# PostgreSQL setup
 conn = psycopg2.connect(DATABASE_URL, sslmode='require')
 cur = conn.cursor()
 
@@ -33,6 +49,7 @@ cur.execute("""
 """)
 conn.commit()
 
+# User data handlers
 def get_user_entry(user_id: str) -> dict:
     cur.execute("SELECT data FROM users WHERE user_id = %s", (user_id,))
     result = cur.fetchone()
@@ -82,6 +99,7 @@ def get_token_seconds_remaining(entry):
 def allowed_channel(interaction: discord.Interaction):
     return interaction.channel_id == CHANNEL_ID
 
+# Events and tasks
 @bot.event
 async def on_ready():
     print(f"✅ Bot is ready: {bot.user} (ID: {bot.user.id})")
@@ -101,6 +119,7 @@ async def auto_generate():
         save_user_entry(user_id, data)
     print("⛏️ Mining balances updated for all users.")
 
+# Slash Commands
 @tree.command(name="connect", description="Link your Meta username", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(meta_username="Your Meta username")
 async def connect(interaction: discord.Interaction, meta_username: str):
@@ -237,4 +256,5 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
 
     await interaction.followup.send(embed=embed, view=SpawnView(), ephemeral=True)
 
+# Run the bot
 bot.run(TOKEN)
