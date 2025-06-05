@@ -190,7 +190,7 @@ async def account(interaction: discord.Interaction):
     if not entry.get("meta_username"):
         await interaction.followup.send(
             embed=discord.Embed(
-                title="❌ Not Connected",
+                title="❌ | Not Connected",
                 description="You need to link your Meta account using `/connect`.",
                 color=discord.Color.red()
             ),
