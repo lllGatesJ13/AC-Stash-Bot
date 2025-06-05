@@ -20,20 +20,24 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 # Flask app for UptimeRobot monitoring
-app = Flask(__name__)
+from aiohttp import web
 
-@app.route('/')
-def uptimerobot_ping():
+async def handle(request):
     print("🔔 Ping from UptimeRobot received")
-    return "OK", 200
+    return web.Response(text="Bot is running!")
 
-@app.route('/health')
-def health_check():
-    print("🔔 Ping from UptimeRobot received")
-    return "Bot is running", 200
+def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
 
-def run_flask():
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    async def run():
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", 5000)
+        await site.start()
+        print("🌐 aiohttp web server started on port 5000 for UptimeRobot")
+
+    asyncio.create_task(run())
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -136,9 +140,7 @@ async def on_ready():
     auto_generate.start()
     
     # Start Flask server in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("🌐 Flask server started on port 5000 for UptimeRobot monitoring")
+      start_webserver()
 
 @tasks.loop(minutes=1)
 async def auto_generate():
