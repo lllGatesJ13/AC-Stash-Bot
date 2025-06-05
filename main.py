@@ -138,9 +138,10 @@ async def on_ready():
     # Initialize database
     init_database()
     auto_generate.start()
-    
-    # Start Flask server in background thread
-      start_webserver()
+
+    # Start web server for UptimeRobot
+    start_webserver()
+
 
 @tasks.loop(minutes=1)
 async def auto_generate():
