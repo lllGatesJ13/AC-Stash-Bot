@@ -177,7 +177,7 @@ async def unlink(interaction: discord.Interaction):
     cursor.close()
     conn.close()
     
-    await interaction.followup.send("🔌 Disconnected.", ephemeral=True)
+    await interaction.followup.send("🔌 | Account Disconnected.", ephemeral=True)
 
 @tree.command(name="account", description="View your game account", guild=discord.Object(id=GUILD_ID))
 async def account(interaction: discord.Interaction):
@@ -211,7 +211,7 @@ async def account(interaction: discord.Interaction):
                     ephemeral=True
                 )
         embed = discord.Embed(
-            title="⚠️ Token Expired",
+            title="⚠️ | Token Expired",
             description="Your auth token has expired. Please refresh.",
             color=discord.Color.orange()
         )
@@ -254,19 +254,19 @@ async def account(interaction: discord.Interaction):
         async def claim_balances(self, interaction: discord.Interaction, button: discord.ui.Button):
             nonlocal entry
             if entry.get("unmined_rp", 0) == 0 and entry.get("unmined_cc", 0) == 0:
-                await interaction.response.send_message("🚫 You have no unmined resources to claim.", ephemeral=True)
+                await interaction.response.send_message("⛏️ | You have no unmined resources to claim.", ephemeral=True)
                 return
 
             claimed_rp = entry.get("unmined_rp", 0)
             claimed_cc = entry.get("unmined_cc", 0)
             entry["rp"] += claimed_rp
-            entry["cc"] += claimed_cc
+            entry["cc"] += claimed_cc 
             entry["unmined_rp"] = 0
             entry["unmined_cc"] = 0
             save_user_entry(user_id, entry)
 
             embed = discord.Embed(
-                title="⛏️ Mining Balances Claimed",
+                title="⛏️ | Mining Balances Claimed",
                 description="Your unmined resources have been added to your wallet.",
                 color=discord.Color.green()
             )
@@ -287,7 +287,7 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
     if not entry.get("meta_username"):
         await interaction.followup.send(
             embed=discord.Embed(
-                title="❌ Not Connected",
+                title="❌ | Not Connected",
                 description="You need to link your Meta account using `/connect`.",
                 color=discord.Color.red()
             ),
@@ -298,7 +298,7 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
     if not is_valid_token(entry):
         await interaction.followup.send(
             embed=discord.Embed(
-                title="❌ Invalid Token",
+                title="❌ | Invalid Token",
                 description="Your token has expired or is invalid.\nPlease refresh it using `/account`.",
                 color=discord.Color.red()
             ),
@@ -312,7 +312,7 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
     except Exception:
         await interaction.followup.send(
             embed=discord.Embed(
-                title="❌ Invalid File",
+                title="❌ | Invalid File",
                 description="The file you uploaded is not valid JSON. Please check and try again.",
                 color=discord.Color.red()
             ),
@@ -321,19 +321,19 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
         return
 
     embed = discord.Embed(
-        title="🧰 Item Upload",
+        title="🧰 | Item Upload",
         description="What would you like to do with this file?",
         color=discord.Color.blurple()
     )
-    embed.add_field(name="📄 File Name", value=file.filename, inline=False)
-    embed.add_field(name="⚠️ Note", value="We are in development — this will not affect the real game.", inline=False)
+    embed.add_field(name="📄 | File Name", value=file.filename, inline=False)
+    embed.add_field(name="⚠️ | Note", value="We are in development — this will not affect the real game.", inline=False)
 
     class SpawnView(discord.ui.View):
         @discord.ui.button(label="Add to Stash", style=discord.ButtonStyle.primary)
         async def stash(self, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="✅ Success",
+                    title="✅ | Success",
                     description="Item added to your stash.",
                     color=discord.Color.green()
                 ),
@@ -344,7 +344,7 @@ async def spawnitems(interaction: discord.Interaction, file: discord.Attachment)
         async def loadout(self, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="✅ Success",
+                    title="✅ | Success",
                     description="Your loadout has been updated.",
                     color=discord.Color.green()
                 ),
